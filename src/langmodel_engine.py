@@ -4,56 +4,77 @@ from typing import Any
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
-from langchain.chains import create_retrieval_chain
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_retrieval_chain, create_stuff_documents_chain 
 from langchain_core.prompts import ChatPromptTemplate
+
+logging.basicConfig(
+    level = logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-def get_qa_chain(vector_db):
+def get_qa_chain(
+        vector_store: Any,
+        model_name: str = 'gpt-4-turbo',
+        temperature: float = 0.0,
+        k_retrievals: int = 5
+) -> Any:
     '''
-    Creates a RetrievalQA chain that connects the LLM to our vector database.
+    Creates a RetrievalQA (RAG) chain using LCEL.
+
+    Will return: Any: invoked runnable chain to process queries
     '''
+    logger.info(f'Initializing QA Chain with model: {model_name}.')
 
-    # Initializing the LLM (Using temperature=0 for finance to keep answers consistent)
-    llm = ChatOpenAI(model_name='gpt-4-turbo', temperature=0)
+    try:
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY is not found in the environment variables.")
+        
+        llm = ChatOpenAI(model_name=model_name, temperature=temperature)
 
-    # Defining a custom prompt to guide the AI 
-    template = '''
-    You are a professional financial analyst. Use the following pieces of context to answer the user's question.
+        system_prompt = (
+            "You are a professional financial analyst. Use the following pieces of context to answer the user's question."
+            "If you cannot derive an answer based on the context, reply that you do not know."
+            "Do not make up an answer. Keep the answer concise and professional."
+            "Always cite the source or page number if it is available in the context. \n\n"
+            "Context: {context}"
+        )
+
+        prompt= ChatPromptTemplate.from_message([
+            ("system", system_prompt),
+            ("human", "{input}")
+        ])
+
+        question_answer_chain = create_stuff_documents_chain(llm, prompt)
+        retriever = vector_store.as_retriever(search_kwargs={'k': k_retrievals})
+        rag_chain = create_retrieval_chain(retriever, question_answer_chain)
+
+        logger.info("RAG Chain has been successfully created.")
+        return rag_chain
     
-    If you can't derive an answer based on the context, replay that you do not know.
-    Don't make up an answer. Keep the answer concise and professional.
-    Always cite the source or page number if it is available in the context.
-    
-    Context: {context}
-    Question: {question}
-    
-    Helpful Answer:'''
-
-    qa_chain_prompt = PromptTemplate(
-        input_variables = ['context', 'question'],
-        template = template
-    )
-
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm, chain_type='stuff', retriever= vector_db.as_retriever(search_kwargs={'k':5}), 
-        return_source_documents=True, chain_type_kwargs={'prompt':qa_chain_prompt}
-    )
-
-    return qa_chain
+    except Exception as e:
+        logger.error(f"Failed to initialize QA chain: {e}")
+        raise
 
 if __name__ == '__main__':
     from vec_store import vector_store_loader
 
-    db = vector_store_loader()
-    chain = get_qa_chain(db)
+    logger.info("Testing the Language Model Engine...")
+    try:
+        db = vector_store_loader()
+        chain = get_qa_chain(db)
 
-    query = 'What are the key financial risks from the documents?'
-    response = chain.invoke({'query': query})
+        user_query = "What are the key financial risks from the documents?"
+        logger.info(f"Invoking chain with query: '{user_query}'")
+        response = chain.invoke({'input': user_query})
 
-    print(f'\nAnswer: {response['result']}')
+        print('RESPONSE')
+        print(response.get('answer', 'No answer has been generated.'))
 
+    except Exception as e:
+        logger.error('Engine test')
 
 
 
